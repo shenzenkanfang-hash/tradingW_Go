@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"go_quant_system/pkg/logger"
+	"go_quant_system/pkg/redisclient"
 )
 
 // -------------------------- 错误类型 --------------------------
@@ -75,9 +76,9 @@ type Client struct {
 
 	// 运行时状态
 	httpClient  *http.Client
-	timeOffset  int64        // 时间偏移（毫秒）
-	lastWeight  float64      // 上一次权重
-	redisClient *RedisClient // Redis客户端
+	timeOffset  int64                          // 时间偏移（毫秒）
+	lastWeight  float64                        // 上一次权重
+	redisClient *redisclient.WeightRedisClient // Redis客户端
 	logger      logger.Logger
 
 	// 并发安全
@@ -89,7 +90,7 @@ type Client struct {
 }
 
 // NewClient 创建币安网关客户端
-func NewClient(productType ProductType, cfg GatewayConfig, logger logger.Logger) ExchangeGateway {
+func NewClient(productType ProductType, cfg GatewayConfig, log logger.Logger) ExchangeGateway {
 	// 兜底默认配置
 	if cfg.HTTP.MaxIdleConns == 0 {
 		defaultCfg := DefaultConfig()
@@ -114,9 +115,9 @@ func NewClient(productType ProductType, cfg GatewayConfig, logger logger.Logger)
 	}
 
 	// 创建Redis客户端（可选，nil则禁用Redis权重监控）
-	var redisCli *RedisClient
+	var redisCli *redisclient.WeightRedisClient
 	if cfg.Redis.Addr != "" {
-		redisCfg := RedisConfig{
+		redisCfg := redisclient.WeightRedisConfig{
 			Addr:                 cfg.Redis.Addr,
 			Password:             cfg.Redis.Password,
 			DBName:               cfg.Redis.DBName,
@@ -126,7 +127,7 @@ func NewClient(productType ProductType, cfg GatewayConfig, logger logger.Logger)
 			WeightWarnThreshold:  cfg.Redis.WeightWarnThreshold,
 			Timeout:              cfg.Redis.Timeout,
 		}
-		redisCli = NewRedisClient(redisCfg, logger)
+		redisCli = redisclient.NewWeightRedisClient(redisCfg, log)
 	}
 
 	// 初始化客户端
@@ -135,7 +136,7 @@ func NewClient(productType ProductType, cfg GatewayConfig, logger logger.Logger)
 		baseURL:     getBaseURL(productType),
 		cfg:         cfg,
 		httpClient:  httpClient,
-		logger:      logger,
+		logger:      log,
 		redisClient: redisCli,
 		hmacPool: sync.Pool{
 			New: func() interface{} {
@@ -146,7 +147,7 @@ func NewClient(productType ProductType, cfg GatewayConfig, logger logger.Logger)
 
 	// 自动校准时间
 	if err := c.CalibrateTime(context.Background()); err != nil {
-		logger.Warn("calibrate time failed on init", logger.Err(err))
+		log.Warn("calibrate time failed on init", logger.Err(err))
 	}
 
 	return c
@@ -369,7 +370,7 @@ func (c *Client) updateRedisWeightLimit(ctx context.Context, usedWeight float64)
 	currentMinute := time.Now().Minute()
 	isBlocked := usedWeight >= c.cfg.Redis.WeightWarnThreshold
 
-	wl := &WeightLimit{
+	wl := &redisclient.WeightLimit{
 		Minute:    currentMinute,
 		LimitNum:  usedWeight,
 		IsBlocked: isBlocked,
